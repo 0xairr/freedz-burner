@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AbiCoder, parseEther } from 'ethers';
-import { MIN_POT, POOL, burnCalldata, nftIface, pickToken, poolIface, priceProblem, revertName, tokenTargets, usdToWei, weiToUsd } from '../lib.mjs';
+import { MIN_POT, POOL, burnCalldata, nftIface, pickToken, poolIface, priceProblem, revertName, tokenTargets, usdToWei, voidsSigned, weiToUsd } from '../lib.mjs';
 
 const ETH_2364 = 2364_00000000n; // $2,364.00 with Chainlink's 8 decimals
 
@@ -35,6 +35,19 @@ test('priceProblem refuses non-positive prices and big jumps from the start pric
   assert.equal(priceProblem(1800_00000000n, ETH_2364), null); // -23.9%
   assert.match(priceProblem(3000_00000000n, ETH_2364), /over 25%/);
   assert.match(priceProblem(1700_00000000n, ETH_2364), /over 25%/);
+  // the first answer (no start price yet) must still be plausible
+  assert.match(priceProblem(50_00000000n, 0n), /outside/);
+  assert.match(priceProblem(1_000_000_00000000n, 0n), /outside/);
+});
+
+test('voidsSigned: dropped token, raised target or unit switch void old burns; lowered targets do not', () => {
+  const old = [{ id: 1n, eth: parseEther('0.0128') }, { id: 2n, eth: parseEther('0.02') }];
+  assert.equal(voidsSigned(old, old), false);
+  assert.equal(voidsSigned(old, [old[0]]), true); // token 2 dropped
+  assert.equal(voidsSigned(old, [old[0], { id: 2n, eth: parseEther('0.03') }]), true); // raised
+  assert.equal(voidsSigned(old, [old[0], { id: 2n, eth: parseEther('0.015') }]), false); // lowered
+  assert.equal(voidsSigned(old, [...old, { id: 3n, eth: parseEther('0.01') }]), false); // token added
+  assert.equal(voidsSigned(old, [old[0], { id: 2n, usd: 40 }]), true); // ETH -> USD
 });
 
 test('tokenTargets: one value for all, one per token, ETH over USD, bad input refused', () => {

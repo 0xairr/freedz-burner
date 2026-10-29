@@ -41,6 +41,8 @@ export function usdToWei(usd, ethUsd8) {
  *  than the market, so the bot stops signing rather than burn for less than the user meant. */
 export function priceProblem(answer, startAnswer) {
   if (answer <= 0n) return 'ETH/USD answer is not positive';
+  // The first answer has nothing to compare with, so it must at least be a plausible price.
+  if (answer < 100_00000000n || answer > 100_000_00000000n) return `ETH/USD $${Number(answer) / 1e8} is outside $100-$100,000`;
   if (startAnswer && (answer * 4n < startAnswer * 3n || answer * 4n > startAnswer * 5n)) {
     return `ETH/USD moved over 25% from the start price ($${Number(startAnswer) / 1e8} -> $${Number(answer) / 1e8}); restart to accept it`;
   }
@@ -63,6 +65,20 @@ export function tokenTargets(ids, eth, usd) {
     const t = eth.length ? { id, eth: parseEther(v) } : { id, usd: Number(v) };
     if (!(t.eth > 0n || t.usd > 0)) throw new Error(`${name} for #${id} must be above 0`);
     return t;
+  });
+}
+
+/** True when new settings make an already-signed burn unwanted: a token dropped, a target raised, or
+ *  a target switched between ETH and USD. Signed burns stay valid until their nonce is used, so the
+ *  bot then voids them with a self-transfer at that nonce. Lowered targets are safe: an old burn
+ *  could only fire at its own, higher minimum. */
+export function voidsSigned(oldTokens, newTokens) {
+  return oldTokens.some((o) => {
+    const n = newTokens.find((t) => t.id === o.id);
+    if (!n) return true;
+    if (o.eth != null && n.eth != null) return n.eth > o.eth;
+    if (o.usd != null && n.usd != null) return n.usd > o.usd;
+    return true;
   });
 }
 

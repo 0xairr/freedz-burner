@@ -20,6 +20,10 @@ the pot is worth `TARGET_USD`, and collects the whole pot in the same transactio
   otherwise. With fixed `TARGET_ETH` it makes no price calls at all.
 - `npm run reload` (Linux) re-reads the token, target, tip and builder settings from `.env` while the
   key stays unlocked, so no password is needed.
+- A signed burn stays valid until the wallet uses its nonce. So when a reload drops a token or raises a
+  target, and when you stop the bot with Ctrl+C, the bot sends a 0-ETH self-transfer at that nonce
+  (~21k gas). Every burn it signed before can then never be included. If the bot is killed some other
+  way, send any transaction from the wallet to get the same effect.
 
 ## Setup (Windows, PowerShell)
 

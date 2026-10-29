@@ -11,7 +11,7 @@ import { parseEnv } from 'node:util';
 import { Contract, JsonRpcProvider, Transaction, Wallet, formatEther, id, parseUnits, toBeHex } from 'ethers';
 import {
   ETH_USD_FEED, NFT, POOL, burnCalldata, feedIface, nftIface, pickToken, poolIface, priceProblem, revertName,
-  tokenTargets, usdToWei, weiToUsd,
+  tokenTargets, usdToWei, voidsSigned, weiToUsd,
 } from './lib.mjs';
 
 const DRY = process.argv.includes('--dry-run');
@@ -141,6 +141,25 @@ async function held(tokens) {
   });
 }
 
+/** Every burn signed so far stays valid until its nonce is used. When settings change so that one
+ *  is no longer wanted (or the bot stops), take that nonce with a 0-ETH self-transfer: whichever of
+ *  the two lands first wins, and the old burns can never be included afterwards. ~21k gas. */
+async function voidSigned(reason) {
+  if (!signer || !sent.length) return;
+  const nonce = sent[sent.length - 1].nonce;
+  if ((await provider.getTransactionCount(me, 'latest')) > nonce) return; // already used
+  const block = await provider.getBlock('latest');
+  const tip = parseUnits('1', 'gwei');
+  const raw = await signer.signTransaction({
+    type: 2, chainId: 1n, nonce, to: me, value: 0n, gasLimit: 21000n,
+    maxPriorityFeePerGas: tip, maxFeePerGas: block.baseFeePerGas * 2n + tip,
+  });
+  await provider.broadcastTransaction(raw).catch((e) => log(`void tx broadcast: ${e.shortMessage ?? e.message}`));
+  await Promise.all([1, 2, 3].map((k) => sendBundle(raw, block.number + k)));
+  log(`${reason}: voiding the burns already signed at nonce ${nonce} with tx ${Transaction.from(raw).hash}`);
+  sent.length = 0;
+}
+
 const targetsText = (tokens) => tokens.map((t) => `#${t.id} at ${t.eth != null ? eth(t.eth) + ' ETH' : '$' + t.usd}`).join(', ');
 
 // ---- startup checks
@@ -166,9 +185,9 @@ async function reload() {
     const nextActive = await held(next.tokens);
     if (!nextActive.length) throw new Error('none of the new TOKEN_IDS is held by this wallet');
     if (nextActive.some((t) => t.usd != null)) await ethUsd();
+    if (voidsSigned(active, nextActive)) await voidSigned('settings dropped a token or raised a target');
     cfg = { ...cfg, tokens: next.tokens, priority: next.priority, gasLimit: next.gasLimit, builders: next.builders };
     active = nextActive;
-    sent.length = 0;
     log(`reloaded .env | ${targetsText(active)} | tip ${formatEther(cfg.priority * 10n ** 9n)} gwei`);
   } catch (e) {
     log(`reload failed, keeping the old settings: ${e.message}`);
@@ -224,13 +243,20 @@ async function onBlock(n) {
     type: 2, chainId: 1n, nonce, to: NFT, data, value: 0n, gasLimit: cfg.gasLimit,
     maxPriorityFeePerGas: cfg.priority, maxFeePerGas: block.baseFeePerGas * 2n + cfg.priority,
   });
-  sent.push({ hash: Transaction.from(raw).hash, block: n, id: t.id });
+  sent.push({ hash: Transaction.from(raw).hash, block: n, id: t.id, nonce });
   while (sent.length && sent[0].block < n - 5) sent.shift();
   const [a, b] = await Promise.all([sendBundle(raw, n + 1), sendBundle(raw, n + 2)]);
   log(`${status} | ${pot >= t.minWei ? 'FIRING' : 'standing order'} -> ${Math.max(a, b)}/${cfg.builders.length} builders`);
 }
 
-process.on('SIGINT', () => { log('stopped'); process.exit(0); });
+let stopping = false;
+process.on('SIGINT', async () => {
+  if (stopping) process.exit(130); // second Ctrl+C: leave now
+  stopping = true;
+  await voidSigned('stopping').catch((e) => log(`could not void signed burns (${e.message}); send any tx from this wallet to void them`));
+  log('stopped');
+  process.exit(0);
+});
 while (active.length) {
   if (reloadWanted) await reload();
   const n = await provider.getBlockNumber().catch(() => lastBlock);
