@@ -1,0 +1,20 @@
+{
+  "name": "freedz-burner",
+  "version": "0.1.0",
+  "description": "Burns FREEDZ into the FreedzRewardPool when the pot reaches a dollar target, via private builder bundles",
+  "main": "burner.mjs",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env burner.mjs",
+    "dry": "node --env-file-if-exists=.env burner.mjs --dry-run",
+    "test": "node --test",
+    "reload": "pkill -HUP -f '^node .*burner.mjs$'"
+  },
+  "type": "module",
+  "dependencies": {
+    "ethers": "6.15.0"
+  },
+  "private": true
+}
